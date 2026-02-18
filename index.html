@@ -39,7 +39,7 @@
     
     <div class="controls">
         <label>Max PDF size:</label>
-        <input type="number" id="maxSize" min="1" max="51200" step="100" value="5120"> KB
+        <input type="number" id="maxSize" min="1" max="51200" step="50" value="350"> KB
         <button id="generateBtn" disabled>Generate PDF</button>
     </div>
     
@@ -110,24 +110,32 @@
                             format: 'a4', 
                             compress: true
                         });
+                        
+                        let pageCount = 1;
                         let yPos = 10;
                         
-                        for (let img of images) {
-                            // Pre-scale canvas for aggressive downsampling
+                        for (let i = 0; i < images.length; i++) {
+                            const img = images[i];
+                            
                             const canvas = document.createElement('canvas');
                             const ctx = canvas.getContext('2d');
-                            const imgProps = { width: img.naturalWidth, height: img.naturalHeight };
-                            canvas.width = imgProps.width * strat.scale;
-                            canvas.height = imgProps.height * strat.scale;
+                            const origWidth = img.naturalWidth;
+                            const origHeight = img.naturalHeight;
+                            canvas.width = origWidth * strat.scale;
+                            canvas.height = origHeight * strat.scale;
                             ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
                             
                             const dataUrl = canvas.toDataURL('image/jpeg', quality);
-                            const pdfImgProps = pdf.getImageProperties(dataUrl);
-                            const pdfWidth = 190;
-                            const pdfHeight = (pdfImgProps.height * pdfWidth) / pdfImgProps.width;
                             
-                            if (yPos + pdfHeight > 277) {
+                            const imgProps = pdf.getImageProperties(dataUrl);
+                            const pdfWidth = 190;
+                            const pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
+                            
+                            if (i === 0) {
+                                // First image always on page 1
+                            } else if (yPos + pdfHeight > 277) {
                                 pdf.addPage();
+                                pageCount++;
                                 yPos = 10;
                             }
                             
@@ -138,11 +146,11 @@
                         pdfBlob = pdf.output('blob');
                         
                         if (pdfBlob.size <= maxBytes) {
-                            finalStrategy = strat.name;
+                            finalStrategy = `${strat.name} (${pageCount} pages)`;
                             break;
                         }
                     } catch (e) {
-                        console.error(e);
+                        console.error('PDF generation error:', e);
                         break;
                     }
                     
@@ -165,7 +173,7 @@
             
             if (pdfBlob) {
                 downloadLink.href = URL.createObjectURL(pdfBlob);
-                downloadLink.download = `optimized-${finalStrategy}-${Date.now()}.pdf`;
+                downloadLink.download = `optimized-${finalStrategy.replace(/[^a-z0-9]/gi, '-')}-${Date.now()}.pdf`;
                 downloadLink.style.display = 'inline-block';
             }
             
@@ -178,8 +186,9 @@
                 const reader = new FileReader();
                 reader.onload = (e) => {
                     const img = new Image();
+                    img.crossOrigin = 'anonymous';
                     img.onload = () => resolve(img);
-                    img.onerror = reject;
+                    img.onerror = () => reject(new Error(`Failed to load ${file.name}`));
                     img.src = e.target.result;
                 };
                 reader.onerror = reject;
