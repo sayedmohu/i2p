@@ -20,7 +20,7 @@
         .info { background: #d1ecf1; color: #0c5460; border: 1px solid #bee5eb; }
         .warn { background: #fff3cd; color: #856404; border: 1px solid #ffeaa7; }
         .progress { width: 100%; height: 8px; background: #eee; border-radius: 4px; overflow: hidden; margin: 1rem 0; }
-        .progress-bar { height: 100%; background: #007bff; width: 0%; transition: width 0.3s ease; }
+        .progress-bar { height: 100%; background: #007bff; width: 0%; transition: none; } /* ✅ Removed transition for precise control */
         #fileList { margin-top: 1rem; }
         .file-item { padding: 0.5rem; border-bottom: 1px solid #eee; font-size: 0.9rem; }
         .download-link { display: inline-block; margin-top: 1rem; padding: 0.75rem 1.5rem; background: #28a745; color: white; text-decoration: none; border-radius: 4px; }
@@ -66,6 +66,7 @@
         const downloadLink = document.getElementById('downloadLink');
         
         let selectedImages = [];
+        let currentProgressTarget = 0;
         
         imageInput.addEventListener('change', (e) => {
             selectedImages = Array.from(e.target.files).filter(f => f.type.startsWith('image/jpeg'));
@@ -77,16 +78,23 @@
             fileList.innerHTML = selectedImages.map(f => `<div class="file-item">${f.name} (${(f.size/1024).toFixed(0)} KB)</div>`).join('') || '<div>No JPEGs selected</div>';
         }
         
-        // ✅ Smooth animated progress updates using requestAnimationFrame
-        let currentProgress = 0;
+        // ✅ Fixed smooth progress with guaranteed 100%
         function updateProgress(targetPercent, text = '') {
+            currentProgressTarget = targetPercent;
             const animate = () => {
-                currentProgress += (targetPercent - currentProgress) * 0.2; // Smooth easing
-                progressBar.style.width = Math.min(100, Math.max(0, currentProgress)) + '%';
+                // Faster easing to reach exactly 100%
+                const diff = targetPercent - currentProgressTarget;
+                currentProgressTarget += diff * 0.3;
+                
+                const clamped = Math.min(100, Math.max(0, currentProgressTarget));
+                progressBar.style.width = clamped + '%';
                 if (text) progressText.textContent = text;
                 
-                if (Math.abs(targetPercent - currentProgress) > 0.1) {
+                if (Math.abs(targetPercent - currentProgressTarget) > 0.1) {
                     requestAnimationFrame(animate);
+                } else if (targetPercent === 100) {
+                    // ✅ Force exact 100% at end
+                    progressBar.style.width = '100%';
                 }
             };
             requestAnimationFrame(animate);
@@ -102,13 +110,14 @@
             showStatus('info', 'Loading images...');
             progressContainer.style.display = 'block';
             generateBtn.disabled = true;
+            currentProgressTarget = 0;
             
-            // Load images with progress
+            // Load images
             updateProgress(5, 'Loading images...');
             const images = await Promise.all(selectedImages.map(fileToImage));
             updateProgress(15, `${images.length} images loaded`);
             
-            // Strategy loop with granular progress
+            // Strategy loop
             const strategies = [
                 { name: 'High Quality', scale: 1.0, minQuality: 0.7, step: 0.05 },
                 { name: 'Medium', scale: 0.8, minQuality: 0.5, step: 0.05 },
@@ -119,9 +128,9 @@
             let pdfBlob = null;
             let finalStrategy = '';
             
-            for (let s = 0; s < strategies.length; s++) {
+            strategyLoop: for (let s = 0; s < strategies.length; s++) {
                 const strat = strategies[s];
-                const baseProgress = 20 + (s * 18); // Each strategy gets ~18% progress
+                const baseProgress = 20 + (s * 18);
                 
                 showStatus('info', `Trying ${strat.name}...`);
                 updateProgress(baseProgress, `${strat.name} (${Math.round(strat.scale*100)}% scale)`);
@@ -135,16 +144,10 @@
                     const attemptProgress = baseProgress + (attempts / maxAttempts) * 18;
                     updateProgress(attemptProgress, `Quality ${(quality*100).toFixed(0)}% (attempt ${attempts}/${maxAttempts})`);
                     
-                    // Small delay to allow UI updates [web:45]
-                    await new Promise(resolve => setTimeout(resolve, 10));
+                    await new Promise(resolve => setTimeout(resolve, 20)); // Slightly longer for visibility
                     
                     try {
-                        const pdf = new jsPDF({ 
-                            unit: 'mm', 
-                            format: 'a4', 
-                            compress: true
-                        });
-                        
+                        const pdf = new jsPDF({ unit: 'mm', format: 'a4', compress: true });
                         let pageCount = 1;
                         let yPos = 10;
                         
@@ -152,10 +155,8 @@
                             const img = images[i];
                             const canvas = document.createElement('canvas');
                             const ctx = canvas.getContext('2d');
-                            const origWidth = img.naturalWidth;
-                            const origHeight = img.naturalHeight;
-                            canvas.width = origWidth * strat.scale;
-                            canvas.height = origHeight * strat.scale;
+                            canvas.width = img.naturalWidth * strat.scale;
+                            canvas.height = img.naturalHeight * strat.scale;
                             ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
                             
                             const dataUrl = canvas.toDataURL('image/jpeg', quality);
@@ -177,8 +178,9 @@
                         
                         if (pdfBlob.size <= maxBytes) {
                             finalStrategy = `${strat.name} (${pageCount} pages)`;
-                            updateProgress(95, 'Success! Finalizing...');
-                            break;
+                            updateProgress(98, 'Success! Generating final PDF...');
+                            await new Promise(resolve => setTimeout(resolve, 200)); // Final pause
+                            break strategyLoop;
                         }
                     } catch (e) {
                         console.error('PDF generation error:', e);
@@ -187,11 +189,11 @@
                     
                     quality -= strat.step;
                 }
-                
-                if (pdfBlob && pdfBlob.size <= maxBytes) break;
             }
             
-            updateProgress(100, 'Complete!');
+            // ✅ ALWAYS force 100% at end
+            updateProgress(100, 'Complete! 🎉');
+            await new Promise(resolve => setTimeout(resolve, 300)); // Ensure animation finishes
             
             const finalSizeKB = (pdfBlob?.size / 1024).toFixed(0);
             const targetKB = (maxBytes / 1024).toFixed(0);
